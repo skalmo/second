@@ -1,12 +1,260 @@
-*.class
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/font-awesome/4.4.0/css/font-awesome.min.css">
+<link href='http://fonts.googleapis.com/css?family=Open+Sans' rel='stylesheet' >
+<script src="//ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+<title>Web AudioPlayer</title>
 
-# Mobile Tools for Java (J2ME)
-.mtj.tmp/
+<script>
+	var AudioBuffers = new Array();
 
-# Package Files #
-*.jar
-*.war
-*.ear
+	var source, context, analyserNode, javascriptNode, 
+	amplitudeArray, volume, sampleSize = 1024; 
 
-# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
-hs_err_pid*
+	var ctx, canvasWidth  = 512, canvasHeight = 256;
+	var startOffset = 0;
+	var startTime = 0;
+	var filters;
+
+	// режимы эквалайзера
+	var mode = new Array();
+	mode["normal"] = new Array (0,0,0,0,0,0,0,0,0,0,0);
+	mode["pop"] = new Array (-1.7,4.8,7.1,8,5.5,0,-2.5,-2.5,-1.7,-1.6);
+	mode["rock"] = new Array (8,4.8,-5.6,-8,-3.3,4,8.8,11.1,11.1,11.2);
+	mode["regi"] = new Array (0,0,0,-5.6,0,6.4,6.4,0,0,0);
+	mode["classic"] = new Array (0,0,0,0,0,0,-7.2,-7.2,-7.2,-9.6);
+
+	// создание эквалайзера
+	var createFilter = function (frequency) {
+		var filter = context.createBiquadFilter();
+		filter.type = 'peaking'; // тип фильтра
+		filter.frequency.value = frequency; // частота
+		filter.Q.value = 1; // Q-factor
+		filter.gain.value = 0;
+		return filter;
+	};
+
+	var createFilters = function () {
+		var frequencies = [60, 170, 310, 600, 1000, 3000, 6000, 12000, 14000, 16000],
+		filters;
+
+		filters = frequencies.map(createFilter);
+		filters.reduce(function (prev, curr) {
+			prev.connect(curr);
+			return curr;
+		});
+		return filters;
+	};
+
+	// настройка звука
+	function initSound(arrayBuffer) {
+		$("#display").hide();
+		$("#loading").show();
+		context.decodeAudioData( arrayBuffer, function(buffer) {
+		AudioBuffers[AudioBuffers.length] = buffer;
+		$("#loading").hide();
+		$("#button").removeClass("non-display");
+		}, function(e) {
+		alert('Error decoding file', e);
+		});
+		
+		volume = context.createGain();
+		
+		analyserNode   = context.createAnalyser();
+		javascriptNode = context.createScriptProcessor(sampleSize, 1, 1);
+		amplitudeArray = new Uint8Array(analyserNode.frequencyBinCount);
+	}	
+	
+	// начало воспроизведения
+	function play() {
+		startTime = context.currentTime;
+		source = context.createBufferSource();
+
+		source.buffer = AudioBuffers[0];
+		source.loop = true;
+		source.connect(context.destination);
+		source.connect(analyserNode);
+		source.connect(volume);
+		analyserNode.connect(javascriptNode);
+		javascriptNode.connect(context.destination);
+		volume.connect(context.destination);
+		
+		filters = createFilters();
+		source.connect(filters[0]);
+		filters[filters.length - 1].connect(context.destination);
+
+		source.start(0, startOffset);
+		$(".play").addClass("non-display");
+		$(".pause").removeClass("non-display");
+		
+		javascriptNode.onaudioprocess = function () {
+			analyserNode.getByteTimeDomainData(amplitudeArray);
+			if (source) {
+				requestAnimFrame(drawTimeDomain);
+				}
+			}
+		}
+	
+	// постановка песни на паузу
+	function pause() {
+		if(source) {
+			source.stop(0);
+			startOffset += context.currentTime - startTime;
+			$(".play").removeClass("non-display");
+			$(".pause").addClass("non-display");
+		}
+	}
+
+	// остановка песни
+	function stop() {
+		if(source) {
+			source.stop(0);
+			startOffset = 0;
+			$(".play").removeClass("non-display");	
+			$(".pause").addClass("non-display");
+		}
+	}
+	
+	// визуализация (создание анимации)
+	window.requestAnimFrame = (function(){
+		return  window.requestAnimationFrame       ||
+        window.webkitRequestAnimationFrame ||
+        window.mozRequestAnimationFrame    ||
+        function(callback, element){
+			window.setTimeout(callback, 1000 / 60);
+			};
+		})();	
+
+	// визуализация
+	function drawTimeDomain() {
+		clearCanvas();
+		for (var i = 0; i < amplitudeArray.length; i++) {
+			var value = amplitudeArray[i] / 256;
+			var y = canvasHeight - (canvasHeight * value) - 1;
+			ctx.fillStyle = 'rgba(14,45,56, 0.8)';
+			ctx.fillRect(i, y, 2, 2);
+			}
+    }
+	
+	// очистка канваса
+	function clearCanvas() {
+		ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    }
+
+	// обработчики событий
+	window.onload = function(){
+		// проверка работы API и загрузка canvas
+		ctx = $("#canvas").get()[0].getContext("2d");
+		try {
+			context = new window.AudioContext();
+			} catch(e) {
+			alert('Web Audio API is not supported in this browser');
+			}
+	
+		// загрузка файла способом drag'n'drop
+		var target = document.getElementById("display");
+		target.addEventListener("dragover", function(event) {
+				event.preventDefault();
+			}, false);	
+		target.addEventListener("drop", function(event) {
+			event.preventDefault();
+			var reader = new FileReader();
+			reader.onload = function(event) {
+				initSound (this.result);
+				};
+			var file = event.dataTransfer.files[0];
+			$("#name").html(file.name);
+			reader.readAsArrayBuffer(file);
+			}, false);
+
+		// загрузка файла через input[type="file"]
+		var control = document.getElementById("loader");
+		control.addEventListener("change", function(event) {
+			var reader = new FileReader();
+			reader.onload = function(event) {
+				initSound (this.result);
+			};
+			var file = control.files[0];
+			$("#name").html(file.name);
+			reader.readAsArrayBuffer(file);
+			}, false);	
+		
+		// изменение громкости
+		$('#button #volume').change(function() {
+           volume.gain.value = $(this).val();
+		});
+		
+		// переключение режима эквалайзера
+		$('#equalizer-r').change(function (e) {
+			if(e.target.value != "manually") {
+				$(".equalizer").hide();
+				for(var i=0; i<10; i++) filters[i].gain.value = mode[e.target.value][i];			
+				}
+			else {$(".equalizer").show();}
+		});
+		// настройка эквалайзера вручную
+		$(".equalizer input[type='range']").change(function(e) {
+			filters[this.getAttribute("class")].gain.value = e.target.value;
+		});		
+	}
+	</script>
+</head>
+<body>
+	<div id="player"> 
+		<h1>Audio Player</h1>
+		<div id="display">
+			<p>Drop here file</p>
+			<label class="file_upload">
+				<span class="button">or select</span>
+				<input type="file" id="loader" accept="audio/*">
+			</label>
+		</div>
+		<div id="loading"><img src = "/audio/loading.GIF"></div>
+		<canvas id="canvas" width="512" height="256" ></canvas>
+		<div id="button" class="non-display">
+			<p id="name"></p>
+			<button class="play" onclick="play()" ><i class="fa fa-play"></i></button>
+			<button class="pause non-display" onclick="pause()"><i class="fa fa-pause"></i></button>
+			<button class="stop" onclick="stop()"><i class="fa fa-stop"></i></button>
+			<div class="bl-sound">
+				<i class="fa fa-volume-up"></i>
+				<input type="range" min="0" max="3" step="0.01" value="1" id="volume">
+			</div>
+			<div class="cb"></div>
+			<div class="bl-equalizer">
+				<p>Выберите режим эквалайзера:</p>
+				<div class="equalizer-type">
+					<select id="equalizer-r">
+						<option disabled>Режим</option>
+						<option value="normal">normal</option>
+						<option value="pop">pop</option>
+						<option value="rock">rock</option>
+						<option value="regi">regi</option>
+						<option value="classic">classic</option>
+						<option value="manually">Выставить вручную</option>
+					</select>
+				</div>
+				<div class="cb"></div>
+				<div class="equalizer">
+					<input class="0" min="-16" max="16" step="0.1" value="0" type="range">
+					<input class="1" min="-16" max="16" step="0.1" value="0" type="range">
+					<input class="2" min="-16" max="16" step="0.1" value="0" type="range">
+					<input class="3" min="-16" max="16" step="0.1" value="0" type="range">
+					<input class="4" min="-16" max="16" step="0.1" value="0" type="range">
+					<input class="5" min="-16" max="16" step="0.1" value="0" type="range">
+					<input class="6" min="-16" max="16" step="0.1" value="0" type="range">
+					<input class="7" min="-16" max="16" step="0.1" value="0" type="range">
+					<input class="8" min="-16" max="16" step="0.1" value="0" type="range">
+					<input class="9" min="-16" max="16" step="0.1" value="0" type="range">
+				</div>
+			</div>
+
+		</div>		
+
+	</div>
+
+</body>
+</html>
